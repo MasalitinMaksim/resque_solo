@@ -3,6 +3,18 @@ module ResqueSolo
     class << self
       def queued?(queue, item)
         return false unless is_unique?(item)
+
+        # check if queue contains job with item class at all
+        persisted_jobs = redis.lrange(redis_queue(queue), 0, -1).select do |json|
+          job = Resque.decode(json)
+          item_class(job) == item_class(item)
+        end
+
+        unless persisted_jobs.any?
+          ResqueSolo::Queue.cleanup(queue)
+          return false
+        end
+
         redis.get(unique_key(queue, item)) == "1"
       end
 
@@ -49,9 +61,8 @@ module ResqueSolo
 
       def destroy(queue, klass, *args)
         klass = klass.to_s
-        redis_queue = "queue:#{queue}"
 
-        redis.lrange(redis_queue, 0, -1).each do |string|
+        redis.lrange(redis_queue(queue), 0, -1).each do |string|
           json = Resque.decode(string)
           next unless json["class"] == klass
           next if args.any? && json["args"] != args
@@ -65,6 +76,10 @@ module ResqueSolo
       end
 
       private
+
+      def redis_queue(queue)
+        "queue:#{queue}"
+      end
 
       def redis
         Resque.redis
